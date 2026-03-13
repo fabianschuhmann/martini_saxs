@@ -40,7 +40,7 @@ src/saxs_tools/
 Install directly from the repository main branch:
 
 ```
-pip install "git+https://github.com/<user>/<repo>.git@main"
+pip install "git+https://github.com/fabianschuhmann/martini_saxs"
 ```
 
 After installation, the CLI should be available as:
