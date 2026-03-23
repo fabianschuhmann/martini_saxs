@@ -371,7 +371,7 @@ def main():
         )
 
         save_outputs(
-            out_base=args.out_base,
+            out_base=out_base,
             q=q,
             Iq=Iq,
             trustbar=trustbar,
