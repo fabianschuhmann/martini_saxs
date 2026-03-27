@@ -4,6 +4,9 @@ import matplotlib.lines as mlines
 from pathlib import Path
 import re
 from scipy.signal import find_peaks
+from itertools import cycle
+
+
 
 def peak_to_axis_fraction(ax, y):
     y0, y1 = ax.get_ylim()
@@ -67,14 +70,37 @@ def plot_saxs_curve(
     peak_max_q=3.5,
     xlim=(0.0, 3.5),
     ylim=None,
+    add_qi=[]
 ):
+    mask_q=q>trust
+    q_trunc=q[mask_q]
+    intensity_trunc=intensity[mask_q]
+
     q_peaks, q_ratios, intensity_peaks = find_saxs_peaks(
-        q, intensity, min_height=peak_height, max_q=peak_max_q
+        q_trunc, intensity_trunc, min_height=peak_height, max_q=peak_max_q
     )
 
-    fig, ax = plt.subplots(figsize=(14, 8))
 
-    ax.plot(q, intensity, label="Simulation", linewidth=2.5)
+    fig, ax = plt.subplots(figsize=(14, 8))
+    colors = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
+
+    ax2 = None
+    if add_qi:
+        ax2 = ax.twinx()
+        ax2.set_ylabel("Additional intensity", fontsize=14)
+        ax2.set_yscale("log")
+    for i , (add_q,add_i) in enumerate(add_qi or [],start=1):
+        label=input(f"Please provide a label name for additional dataset {i}: ")
+        color=next(colors)
+        ax2.plot(add_q,(add_i/np.max(add_i)*np.max(intensity)),linewidth=2.5,label=label,color=color,alpha=.75)
+
+    color=next(colors)
+    ax.plot(q, intensity, label="Simulation", linewidth=2.5,color=color,zorder=3)
+
+    color=next(colors)
+    ax.plot(q_trunc,intensity_trunc,alpha=.75,linewidth=6,color=color,zorder=1, label="Trusted Region")
+    
+
     ax.plot(q_peaks, intensity_peaks, "o")
 
     ax.set_xlabel("q (1/nm)", fontsize=14)
@@ -124,6 +150,9 @@ def plot_saxs_curve(
     ax.tick_params(length=6, width=1.5, labelsize=12)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+    handles1, labels1 = ax.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels() if ax2 else ([], [])
+    ax.legend(handles1 + handles2, labels1 + labels2, fontsize=16)
 
     fig.tight_layout()
     fig.savefig(output_png, dpi=300)
@@ -134,9 +163,9 @@ def plot_saxs_curve(
 def add_plot_parser(subparsers):
     plot_parser = subparsers.add_parser("plot", help="Plot SAXS output and detect peaks")
     plot_parser.add_argument(
-        "--out-base",
+        "--in-base",
         default=None,
-        help="Base output path used during compute. Default: latest martini_saxs_<timestamp> in the search directory.",
+        help="Base input path used during compute. Default: latest martini_saxs_<timestamp> in the search directory.",
     )
     plot_parser.add_argument(
         "--search-dir",
@@ -150,7 +179,25 @@ def add_plot_parser(subparsers):
     plot_parser.add_argument("--x-max", type=float, default=3.5)
     plot_parser.add_argument("--y-min", type=float, default=None)
     plot_parser.add_argument("--y-max", type=float, default=None)
+    plot_parser.add_argument(
+    "--add-data",
+    action="append",
+    default=[],
+    help="Add more data in the form of the ouput of martini_saxs compute. Can be added multiple times.",
+    )
     return plot_parser
+
+def _get_additional_data(additional_data):
+    data=[]
+    for path in additional_data:
+        raw_data=Path(f"{path}_saxs_curve.dat")
+        q,i,_=read_saxs_curve_with_trust(path)
+        data.append((q,i))
+    if len(data)==0:
+        return None
+    else:
+        return data
+
 
 def plot_from_out_base(
     out_base,
@@ -159,6 +206,7 @@ def plot_from_out_base(
     title=None,
     xlim=(0.0, 3.5),
     ylim=None,
+    additionals=[]
 ):
     out_base = Path(out_base)
     curve_path = Path(f"{out_base}_saxs_curve.dat")
@@ -180,6 +228,7 @@ def plot_from_out_base(
         peak_max_q=peak_max_q,
         xlim=xlim,
         ylim=ylim,
+        add_qi=_get_additional_data(additionals)
     )
 
     write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks)
@@ -207,7 +256,7 @@ def find_latest_martini_saxs_out_base(search_dir="."):
     return candidates[0][1]
 
 def run_plot_command(args):
-    out_base = args.out_base
+    out_base = args.in_base
     if out_base is None:
         out_base = find_latest_martini_saxs_out_base(args.search_dir)
 
@@ -224,6 +273,7 @@ def run_plot_command(args):
         title=args.title,
         xlim=(args.x_min, args.x_max),
         ylim=ylim,
+        additionals=args.add_data,
     )
 
     print(f"Wrote plot: {output_png}")
