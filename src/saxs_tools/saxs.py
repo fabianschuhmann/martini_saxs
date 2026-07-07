@@ -21,7 +21,7 @@ def make_default_out_base():
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"martini_saxs_{timestamp}"
 
-def gaussian_smooth_1d(q, Iq, sigma_q):
+def gaussian_smooth_1d(q, Iq, sigma_q,trust):
     q = np.asarray(q, dtype=float)
     Iq = np.asarray(Iq, dtype=float)
 
@@ -42,7 +42,7 @@ def gaussian_smooth_1d(q, Iq, sigma_q):
     return np.convolve(Iq, kernel, mode="same")
 
 
-def read_cg_pdb(pdb_path):
+def read_cg_pdb(pdb_path,ignore):
     """
     Load a Martini CG PDB with MDAnalysis.
 
@@ -56,11 +56,13 @@ def read_cg_pdb(pdb_path):
         MDAnalysis dimensions, with box lengths converted to nm.
     """
     u = mda.Universe(str(pdb_path))
-    coords = u.atoms.positions.copy() / 10.0  # Å -> nm
-    bead_types = list(u.atoms.names)
-    dimensions = u.dimensions.copy()
-    dimensions[:3] /= 10.0  # Å -> nm
-    return coords, bead_types, dimensions
+    bead_types = u.atoms.names
+    if ignore:
+        ignore_selection = " or ".join(f"resname {resname}" for resname in ignore)
+        ignored_indices = u.select_atoms(ignore_selection).indices
+    else:
+        ignored_indices = np.array([], dtype=int)
+    return u, bead_types,ignored_indices
 
 
 def get_form_factors(bead_types, envelope_dict):
@@ -253,6 +255,9 @@ def estimate_saxs_from_cg(
     itp_dir=".",
     itp_pattern="*.itp",
     verbose=True,
+    xtc=None,
+    step=1,
+    ignore=[]
 ):
     """
     High-level SAXS driver.
@@ -270,39 +275,61 @@ def estimate_saxs_from_cg(
         verbose=verbose,
     )
 
-    coords, bead_types, dimensions = read_cg_pdb(prepared_pdb)
+    u, bead_types,ignored = read_cg_pdb(prepared_pdb,ignore)
     form_factors = get_form_factors(bead_types, get_base_electrons())
+    trustbar=np.inf
+    counts_sum=None
+    Iq_av=0
 
-    q_values = np.linspace(q_min, q_max, n_q)
-    trustbar = 2.0 * np.pi / np.min(dimensions[:3])
+    if xtc is not None:
+        u.load_new(xtc)
 
-    if debye:
-        Iq = compute_Iq_parallel(
-            coords=coords,
-            bead_types=bead_types,
-            form_factors=form_factors,
-            q_values=q_values,
-            use_pbc_distances=use_pbc_distances,
-            dimensions=dimensions,
-            max_workers=max_workers,
-        )
-        counts = None
-    else:
-        Iq, counts = compute_saxs_periodic_fourier(
-            q_values=q_values,
-            coords=coords,
-            form_factors=form_factors,
-            bead_types=bead_types,
-            dimensions=dimensions,
-            return_counts=True,
-        )
+    mask = np.ones(bead_types.shape[0], dtype=bool)
+    mask[ignored] = False
 
-        if smooth_sigma_factor is not None and smooth_sigma_factor > 0:
-            dq = np.mean(np.diff(q_values))
-            sigma_q = smooth_sigma_factor * dq
-            Iq = gaussian_smooth_1d(q_values, Iq, sigma_q=sigma_q)
+    bead_types = bead_types[mask]
 
-    return q_values, Iq, trustbar, counts, prepared_pdb
+    frames=len(u.trajectory[::step])
+    for t,ts in tqdm(enumerate(u.trajectory[::step]),total=frames):
+        dimensions=ts.dimensions[:3]/10
+        coords=u.atoms.positions.copy()/10
+        coords=coords[mask]
+        trustbar = min(trustbar,2.0 * np.pi / np.min(dimensions))
+        # q_values = np.linspace(max(q_min,trustbar), q_max, n_q)
+        q_values=np.linspace(q_min, q_max, n_q)
+
+        if debye:
+            Iq = compute_Iq_parallel(
+                coords=coords,
+                bead_types=bead_types,
+                form_factors=form_factors,
+                q_values=q_values,
+                use_pbc_distances=use_pbc_distances,
+                dimensions=dimensions,
+                max_workers=max_workers,
+            )
+            counts = None
+        else:
+            Iq, counts = compute_saxs_periodic_fourier(
+                q_values=q_values,
+                coords=coords,
+                form_factors=form_factors,
+                bead_types=bead_types,
+                dimensions=dimensions,
+                return_counts=True,
+            )
+
+            if smooth_sigma_factor is not None and smooth_sigma_factor > 0:
+                dq = np.mean(np.diff(q_values))
+                sigma_q = smooth_sigma_factor * dq
+                Iq = gaussian_smooth_1d(q_values, Iq, sigma_q=sigma_q,trust=trustbar)
+        Iq_av+=Iq/frames
+        if counts is not None:
+            if counts_sum is None:
+                counts_sum = counts.copy()
+            else:
+                counts_sum += counts
+    return q_values, Iq_av, trustbar, counts_sum, prepared_pdb
 
 
 def save_outputs(out_base, q, Iq, trustbar, counts=None):
@@ -344,7 +371,10 @@ def build_parser():
     compute_parser.add_argument("--itp-dir", default=".", help="Default: '.'")
     compute_parser.add_argument("--itp-pattern", default="*.itp", help="Default: '*.itp'")
     compute_parser.add_argument("--quiet", action="store_true")
-
+    compute_parser.add_argument("--xtc", default=None,help="Default: None. Calculate saxs as an ensemble average over the trajectory.")
+    compute_parser.add_argument("--xtc-step",type=int,default=1,help="Default: 1. Consider every nth frame of the trajectory. ")
+    compute_parser.add_argument("--ignore",type=str,action="append",default=[],help="Ignore certain residues. Can be passed multiple times."
+)
     add_plot_parser(subparsers)
 
     return parser
@@ -368,6 +398,9 @@ def main():
             itp_dir=args.itp_dir,
             itp_pattern=args.itp_pattern,
             verbose=not args.quiet,
+            xtc=args.xtc,
+            step=args.xtc_step,
+            ignore=args.ignore
         )
 
         save_outputs(

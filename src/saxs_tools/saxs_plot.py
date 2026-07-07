@@ -117,32 +117,33 @@ def plot_saxs_curve(
         ax.set_ylim(*ylim)
 
     for i, (qp, ip) in enumerate(zip(q_peaks, intensity_peaks)):
-        ymax_frac = peak_to_axis_fraction(ax, ip)
-        ymax_frac = np.clip(ymax_frac, 0.0, 1.0)
-        line = mlines.Line2D(
-            [qp, qp],
-            [0.0, ymax_frac],
-            transform=ax.get_xaxis_transform(),  # x in data, y in axes fraction
-            linestyle="dashed",
-            color="gray",
-            linewidth=1.5,
-            alpha=0.7,
-        )
-        ax.add_line(line)
+        if qp < xlim[1]:
+            ymax_frac = peak_to_axis_fraction(ax, ip)
+            ymax_frac = np.clip(ymax_frac, 0.0, 1.0)
+            line = mlines.Line2D(
+                [qp, qp],
+                [0.0, ymax_frac],
+                transform=ax.get_xaxis_transform(),  # x in data, y in axes fraction
+                linestyle="dashed",
+                color="gray",
+                linewidth=1.5,
+                alpha=0.7,
+            )
+            ax.add_line(line)
 
-        ax.annotate(
-            f"{qp:.2f}",
-            xy=(qp, 0),
-            xycoords=("data", "axes fraction"),
-            xytext=(-15, 10),
-            textcoords="offset points",
-            ha="center",
-            va="bottom",
-            fontsize=10,
-        )
+            ax.annotate(
+                f"{qp:.2f}",
+                xy=(qp, 0),
+                xycoords=("data", "axes fraction"),
+                xytext=(-15, 10),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=10,
+            )
 
-        if i < 6:
-            ax.text(qp, ip * 1.05, f"{q_ratios[i]:.2f}", ha="center", fontsize=10)
+            if i < 6:
+                ax.text(qp, ip * 1.05, f"{q_ratios[i]:.2f}", ha="center", fontsize=10)
 
     
 

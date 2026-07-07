@@ -103,7 +103,9 @@ def update_universe_atom_names(universe, mapping):
     for res in universe.residues:
         resname = res.resname
         if resname not in mapping:
-            raise KeyError(f"No bead mapping provided for residue '{resname}'")
+            resname=res.atoms[0].name
+            if resname not in mapping:
+                raise KeyError(f"No bead mapping provided for residue '{resname}'")
 
         bead_types = mapping[resname]
         atoms = res.atoms
