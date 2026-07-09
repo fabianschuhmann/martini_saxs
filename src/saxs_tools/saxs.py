@@ -275,11 +275,12 @@ def estimate_saxs_from_cg(
         verbose=verbose,
     )
 
-    u, bead_types,ignored = read_cg_pdb(prepared_pdb,ignore)
+    u, bead_types, ignored = read_cg_pdb(prepared_pdb, ignore)
     form_factors = get_form_factors(bead_types, get_base_electrons())
-    trustbar=np.inf
-    counts_sum=None
-    Iq_av=0
+    trustbar = np.inf
+    counts_sum = None
+    Iq_av = 0.0
+    Iq2_av = 0.0
 
     if xtc is not None:
         u.load_new(xtc)
@@ -289,14 +290,14 @@ def estimate_saxs_from_cg(
 
     bead_types = bead_types[mask]
 
-    frames=len(u.trajectory[::step])
-    for t,ts in tqdm(enumerate(u.trajectory[::step]),total=frames):
-        dimensions=ts.dimensions[:3]/10
-        coords=u.atoms.positions.copy()/10
-        coords=coords[mask]
-        trustbar = min(trustbar,2.0 * np.pi / np.min(dimensions))
+    frames = len(u.trajectory[::step])
+    for t, ts in tqdm(enumerate(u.trajectory[::step]), total=frames):
+        dimensions = ts.dimensions[:3] / 10
+        coords = u.atoms.positions.copy() / 10
+        coords = coords[mask]
+        trustbar = min(trustbar, 2.0 * np.pi / np.min(dimensions))
         # q_values = np.linspace(max(q_min,trustbar), q_max, n_q)
-        q_values=np.linspace(q_min, q_max, n_q)
+        q_values = np.linspace(q_min, q_max, n_q)
 
         if debye:
             Iq = compute_Iq_parallel(
@@ -322,30 +323,39 @@ def estimate_saxs_from_cg(
             if smooth_sigma_factor is not None and smooth_sigma_factor > 0:
                 dq = np.mean(np.diff(q_values))
                 sigma_q = smooth_sigma_factor * dq
-                Iq = gaussian_smooth_1d(q_values, Iq, sigma_q=sigma_q,trust=trustbar)
-        Iq_av+=Iq/frames
+                Iq = gaussian_smooth_1d(q_values, Iq, sigma_q=sigma_q, trust=trustbar)
+
+        Iq_av += Iq / frames
+        Iq2_av += (Iq ** 2) / frames
+
         if counts is not None:
             if counts_sum is None:
                 counts_sum = counts.copy()
             else:
                 counts_sum += counts
-    return q_values, Iq_av, trustbar, counts_sum, prepared_pdb
+
+    var_Iq = Iq2_av - Iq_av**2
+    var_Iq = np.maximum(var_Iq, 0.0)
+    std_Iq = np.sqrt(var_Iq)
+
+    return q_values, Iq_av, trustbar, counts_sum, prepared_pdb, std_Iq
 
 
-def save_outputs(out_base, q, Iq, trustbar, counts=None):
+def save_outputs(out_base, q, Iq, trustbar, counts=None,std=None):
     out_base = Path(out_base)
     out_base.parent.mkdir(parents=True, exist_ok=True)
 
     np.save(f"{out_base}_q_values.npy", q)
     np.save(f"{out_base}_Iq.npy", Iq)
+    np.save(f"{out_base}_Iq_std.npy", std)
 
     if counts is not None:
         np.save(f"{out_base}_counts.npy", counts)
 
     np.savetxt(
         f"{out_base}_saxs_curve.dat",
-        np.column_stack((q, Iq)),
-        header=f"q I(q)\nTrust {trustbar}",
+        np.column_stack((q, Iq,std)),
+        header=f"q I(q) STD\nTrust {trustbar}",
     )
 
 
@@ -386,7 +396,7 @@ def main():
 
     if args.command == "compute":
         out_base = args.out_base or make_default_out_base()
-        q, Iq, trustbar, counts, prepared_pdb = estimate_saxs_from_cg(
+        q, Iq, trustbar, counts, prepared_pdb, std = estimate_saxs_from_cg(
             pdb_path=args.pdb,
             q_min=args.q_min,
             q_max=args.q_max,
@@ -409,6 +419,7 @@ def main():
             Iq=Iq,
             trustbar=trustbar,
             counts=counts,
+            std=std
         )
 
         if not args.quiet:

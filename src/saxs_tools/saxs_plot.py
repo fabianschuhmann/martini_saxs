@@ -28,8 +28,9 @@ def read_saxs_curve_with_trust(curve_path):
     data = np.loadtxt(curve_path, comments=["@", "#"])
     q = data[:, 0]
     intensity = data[:, 1]
+    std = data[:,2]
 
-    return q, intensity, trust
+    return q, intensity,std, trust
 
 
 def find_saxs_peaks(q, intensity, min_height=10.0, max_q=3.5, min_prominence=None):
@@ -80,6 +81,7 @@ def plot_saxs_curve(
     xlim=(0.0, 3.5),
     ylim=None,
     add_qi=None,
+    std=None
 ):
     mask_q = q > trust
     q_trunc = q[mask_q]
@@ -116,6 +118,7 @@ def plot_saxs_curve(
 
     color = next(colors)
     ax.plot(q, intensity, label="Simulation", linewidth=2.5, color=color, zorder=3)
+    ax.fill_between(q, intensity - std, intensity + std, color=color, alpha=0.1, zorder=2)
 
     color = next(colors)
     ax.plot(
@@ -248,7 +251,7 @@ def plot_from_out_base(
     output_png = Path(f"{out_base}_plot.png")
     output_txt = Path(f"{out_base}_peaks.txt")
 
-    q, intensity, trust = read_saxs_curve_with_trust(curve_path)
+    q, intensity,std, trust = read_saxs_curve_with_trust(curve_path)
 
     if title is None:
         title = f"Martini SAXS Profile ({out_base.name})"
@@ -265,6 +268,7 @@ def plot_from_out_base(
         xlim=xlim,
         ylim=ylim,
         add_qi=_get_additional_data(additionals or []),
+        std=std
     )
 
     write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks, prominences)
