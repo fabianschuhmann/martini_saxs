@@ -7,7 +7,6 @@ from scipy.signal import find_peaks
 from itertools import cycle
 
 
-
 def peak_to_axis_fraction(ax, y):
     y0, y1 = ax.get_ylim()
 
@@ -15,6 +14,7 @@ def peak_to_axis_fraction(ax, y):
         return (np.log(y) - np.log(y0)) / (np.log(y1) - np.log(y0))
     else:
         return (y - y0) / (y1 - y0)
+
 
 def read_saxs_curve_with_trust(curve_path):
     curve_path = Path(curve_path)
@@ -32,15 +32,21 @@ def read_saxs_curve_with_trust(curve_path):
     return q, intensity, trust
 
 
-def find_saxs_peaks(q, intensity, min_height=10.0, max_q=3.5):
-    peaks, props = find_peaks(intensity, height=min_height)
+def find_saxs_peaks(q, intensity, min_height=10.0, max_q=3.5, min_prominence=None):
+    peaks, props = find_peaks(
+        intensity,
+        height=min_height,
+        prominence=min_prominence,
+    )
 
     q_peaks = q[peaks]
     intensity_peaks = intensity[peaks]
+    prominences = props.get("prominences", np.zeros_like(intensity_peaks))
 
     mask = q_peaks <= max_q
     q_peaks = q_peaks[mask]
     intensity_peaks = intensity_peaks[mask]
+    prominences = prominences[mask]
 
     if len(q_peaks) > 0:
         q1 = q_peaks[0]
@@ -48,16 +54,18 @@ def find_saxs_peaks(q, intensity, min_height=10.0, max_q=3.5):
     else:
         q_ratios = np.array([])
 
-    return q_peaks, q_ratios, intensity_peaks
+    return q_peaks, q_ratios, intensity_peaks, prominences
 
 
-def write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks):
+def write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks, prominences):
     output_txt = Path(output_txt)
     with output_txt.open("w", encoding="utf8") as f:
         f.write("Peaks\n")
-        f.write(f"{'Peak':<5} {'q (nm^-1)':<12} {'q/q1':<10} {'I (a.u.)':<12}\n")
-        for i, (qp, qr, ip) in enumerate(zip(q_peaks, q_ratios, intensity_peaks), start=1):
-            f.write(f"{i:<5} {qp:<12.3f} {qr:<10.2f} {ip:<12.2f}\n")
+        f.write(f"{'Peak':<5} {'q (nm^-1)':<12} {'q/q1':<10} {'I (a.u.)':<12} {'Prom.':<12}\n")
+        for i, (qp, qr, ip, pr) in enumerate(
+            zip(q_peaks, q_ratios, intensity_peaks, prominences), start=1
+        ):
+            f.write(f"{i:<5} {qp:<12.3f} {qr:<10.2f} {ip:<12.2f} {pr:<12.2f}\n")
 
 
 def plot_saxs_curve(
@@ -68,18 +76,22 @@ def plot_saxs_curve(
     title="Martini SAXS Profile",
     peak_height=10.0,
     peak_max_q=3.5,
+    min_prominence=None,
     xlim=(0.0, 3.5),
     ylim=None,
-    add_qi=[]
+    add_qi=None,
 ):
-    mask_q=q>trust
-    q_trunc=q[mask_q]
-    intensity_trunc=intensity[mask_q]
+    mask_q = q > trust
+    q_trunc = q[mask_q]
+    intensity_trunc = intensity[mask_q]
 
-    q_peaks, q_ratios, intensity_peaks = find_saxs_peaks(
-        q_trunc, intensity_trunc, min_height=peak_height, max_q=peak_max_q
+    q_peaks, q_ratios, intensity_peaks, prominences = find_saxs_peaks(
+        q_trunc,
+        intensity_trunc,
+        min_height=peak_height,
+        max_q=peak_max_q,
+        min_prominence=min_prominence,
     )
-
 
     fig, ax = plt.subplots(figsize=(14, 8))
     colors = cycle(plt.rcParams["axes.prop_cycle"].by_key()["color"])
@@ -89,26 +101,38 @@ def plot_saxs_curve(
         ax2 = ax.twinx()
         ax2.set_ylabel("Additional intensity", fontsize=14)
         ax2.set_yscale("log")
-    for i , (add_q,add_i) in enumerate(add_qi or [],start=1):
-        label=input(f"Please provide a label name for additional dataset {i}: ")
-        color=next(colors)
-        ax2.plot(add_q,(add_i/np.max(add_i)*np.max(intensity)),linewidth=2.5,label=label,color=color,alpha=.75)
 
-    color=next(colors)
-    ax.plot(q, intensity, label="Simulation", linewidth=2.5,color=color,zorder=3)
+    for i, (add_q, add_i) in enumerate(add_qi or [], start=1):
+        label = input(f"Please provide a label name for additional dataset {i}: ")
+        color = next(colors)
+        ax2.plot(
+            add_q,
+            (add_i / np.max(add_i) * np.max(intensity)),
+            linewidth=2.5,
+            label=label,
+            color=color,
+            alpha=0.75,
+        )
 
-    color=next(colors)
-    ax.plot(q_trunc,intensity_trunc,alpha=.75,linewidth=6,color=color,zorder=1, label="Trusted Region")
-    
+    color = next(colors)
+    ax.plot(q, intensity, label="Simulation", linewidth=2.5, color=color, zorder=3)
+
+    color = next(colors)
+    ax.plot(
+        q_trunc,
+        intensity_trunc,
+        alpha=0.75,
+        linewidth=6,
+        color=color,
+        zorder=1,
+        label="Trusted Region",
+    )
 
     ax.plot(q_peaks, intensity_peaks, "o")
 
     ax.set_xlabel("q (1/nm)", fontsize=14)
     ax.set_ylabel("Intensity (a.u.)", fontsize=14)
     ax.set_title(title, fontsize=16)
-    
-
-    #ymin, ymax = ax.get_ylim()
 
     ax.set_yscale("log")
     ax.set_xlim(*xlim)
@@ -145,12 +169,11 @@ def plot_saxs_curve(
             if i < 6:
                 ax.text(qp, ip * 1.05, f"{q_ratios[i]:.2f}", ha="center", fontsize=10)
 
-    
-
     ax.axvspan(0.0, trust, color="gray", alpha=0.2)
     ax.tick_params(length=6, width=1.5, labelsize=12)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
+
     handles1, labels1 = ax.get_legend_handles_labels()
     handles2, labels2 = ax2.get_legend_handles_labels() if ax2 else ([], [])
     ax.legend(handles1 + handles2, labels1 + labels2, fontsize=16)
@@ -159,7 +182,8 @@ def plot_saxs_curve(
     fig.savefig(output_png, dpi=300)
     plt.close(fig)
 
-    return q_peaks, q_ratios, intensity_peaks
+    return q_peaks, q_ratios, intensity_peaks, prominences
+
 
 def add_plot_parser(subparsers):
     plot_parser = subparsers.add_parser("plot", help="Plot SAXS output and detect peaks")
@@ -171,9 +195,15 @@ def add_plot_parser(subparsers):
     plot_parser.add_argument(
         "--search-dir",
         default=".",
-        help="Directory to search for latest martini_saxs_<timestamp> output if --out-base is omitted.",
+        help="Directory to search for latest martini_saxs_<timestamp> output if --in-base is omitted.",
     )
     plot_parser.add_argument("--peak-height", type=float, default=10.0)
+    plot_parser.add_argument(
+        "--min-prominence",
+        type=float,
+        default=None,
+        help="Minimum local prominence required for a peak to be counted.",
+    )
     plot_parser.add_argument("--peak-max-q", type=float, default=3.5)
     plot_parser.add_argument("--title", default=None)
     plot_parser.add_argument("--x-min", type=float, default=0.0)
@@ -181,20 +211,23 @@ def add_plot_parser(subparsers):
     plot_parser.add_argument("--y-min", type=float, default=None)
     plot_parser.add_argument("--y-max", type=float, default=None)
     plot_parser.add_argument(
-    "--add-data",
-    action="append",
-    default=[],
-    help="Add more data in the form of the ouput of martini_saxs compute. Can be added multiple times.",
+        "--add-data",
+        action="append",
+        default=[],
+        help="Add more data in the form of the output base of martini_saxs compute. Can be added multiple times.",
     )
     return plot_parser
 
+
 def _get_additional_data(additional_data):
-    data=[]
+    data = []
     for path in additional_data:
-        raw_data=Path(f"{path}_saxs_curve.dat")
-        q,i,_=read_saxs_curve_with_trust(path)
-        data.append((q,i))
-    if len(data)==0:
+        raw_data = Path(path)
+        arr = np.loadtxt(raw_data, comments=["@", "#"])
+        q = arr[:, 0]
+        i = arr[:, 1]
+        data.append((q, i))
+    if len(data) == 0:
         return None
     else:
         return data
@@ -204,10 +237,11 @@ def plot_from_out_base(
     out_base,
     peak_height=10.0,
     peak_max_q=3.5,
+    min_prominence=None,
     title=None,
     xlim=(0.0, 3.5),
     ylim=None,
-    additionals=[]
+    additionals=None,
 ):
     out_base = Path(out_base)
     curve_path = Path(f"{out_base}_saxs_curve.dat")
@@ -219,7 +253,7 @@ def plot_from_out_base(
     if title is None:
         title = f"Martini SAXS Profile ({out_base.name})"
 
-    q_peaks, q_ratios, intensity_peaks = plot_saxs_curve(
+    q_peaks, q_ratios, intensity_peaks, prominences = plot_saxs_curve(
         q=q,
         intensity=intensity,
         trust=trust,
@@ -227,14 +261,16 @@ def plot_from_out_base(
         title=title,
         peak_height=peak_height,
         peak_max_q=peak_max_q,
+        min_prominence=min_prominence,
         xlim=xlim,
         ylim=ylim,
-        add_qi=_get_additional_data(additionals)
+        add_qi=_get_additional_data(additionals or []),
     )
 
-    write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks)
+    write_peaks_txt(output_txt, q_peaks, q_ratios, intensity_peaks, prominences)
 
     return output_png, output_txt
+
 
 def find_latest_martini_saxs_out_base(search_dir="."):
     search_dir = Path(search_dir)
@@ -250,11 +286,12 @@ def find_latest_martini_saxs_out_base(search_dir="."):
     if not candidates:
         raise FileNotFoundError(
             f"No martini_saxs_<timestamp> results found in '{search_dir}'. "
-            "Either run 'martini_saxs compute' first or provide --out-base explicitly."
+            "Either run 'martini_saxs compute' first or provide --in-base explicitly."
         )
 
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
+
 
 def run_plot_command(args):
     out_base = args.in_base
@@ -271,6 +308,7 @@ def run_plot_command(args):
         out_base=out_base,
         peak_height=args.peak_height,
         peak_max_q=args.peak_max_q,
+        min_prominence=args.min_prominence,
         title=args.title,
         xlim=(args.x_min, args.x_max),
         ylim=ylim,
@@ -280,5 +318,6 @@ def run_plot_command(args):
     print(f"Wrote plot: {output_png}")
     print(f"Wrote peaks: {output_txt}")
 
-if __name__=="__main__":
+
+if __name__ == "__main__":
     pass
