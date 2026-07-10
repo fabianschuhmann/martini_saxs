@@ -133,9 +133,9 @@ def plot_saxs_curve(
 
     ax.plot(q_peaks, intensity_peaks, "o")
 
-    ax.set_xlabel("q (1/nm)", fontsize=14)
-    ax.set_ylabel("Intensity (a.u.)", fontsize=14)
-    ax.set_title(title, fontsize=16)
+    ax.set_xlabel("q (1/nm)", fontsize=18, fontweight = 'bold')
+    ax.set_ylabel("Intensity (a.u.)", fontsize=18, fontweight = 'bold')
+    ax.set_title(title, fontsize=22)
 
     ax.set_yscale("log")
     ax.set_xlim(*xlim)
@@ -173,7 +173,7 @@ def plot_saxs_curve(
                 ax.text(qp, ip * 1.05, f"{q_ratios[i]:.2f}", ha="center", fontsize=10)
 
     ax.axvspan(0.0, trust, color="gray", alpha=0.2)
-    ax.tick_params(length=6, width=1.5, labelsize=12)
+    ax.tick_params(length=6, width=1.5, labelsize=14)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
 
